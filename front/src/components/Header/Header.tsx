@@ -55,6 +55,11 @@ const Header = () => {
             name="번역"
             link="/translate"
           />
+          <HeaderButton
+            isClicked={path === "/learn"}
+            name="교육"
+            link="/learn"
+          />
         </div>
       </div>
     </>

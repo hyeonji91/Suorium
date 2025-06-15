@@ -8,6 +8,11 @@ const MainPage = lazy(() => import("./pages/MainPage/MainPage"));
 const TranslatePage = lazy(() => import("./pages/TranslatePage/TranslatePage"));
 const Login = lazy(() => import("./pages/Auth/Login/Login"));
 const SignUp = lazy(() => import("./pages/Auth/SIgnUp/SignUp"));
+const LearnPage = lazy(() => import("./pages/LearnPage/LearnPage"))
+const LearnDetail = lazy(() => import("./pages/LearnPage/LearnDetail"))
+
+
+
 
 function App() {
   return (
@@ -20,6 +25,8 @@ function App() {
             <Route path="/translate" element={<TranslatePage />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<SignUp />} />
+            <Route path="/learn" element={<LearnPage />} />
+            <Route path="/learn/:id" element={<LearnDetail />} />
           </Routes>
         </Suspense>
       </Router>
