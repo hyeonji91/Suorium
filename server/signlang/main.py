@@ -220,6 +220,7 @@ async def handle_client(websocket, path):
         result_queue.put(None)
 
 
+
 start_server_1 = websockets.serve(handle_client, "localhost", 8080)
 start_server_2 = websockets.serve(finger_spell, "localhost", 8081)  
 start_server_3 = websockets.serve(generate_sentence, "localhost", 8082)

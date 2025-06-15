@@ -87,6 +87,7 @@ const Input = forwardRef<ChildProps>((props, ref) => {
 
   const send_words = useCallback(() => {
     if (text && socketRef_LLM.current.readyState === WebSocket.OPEN) {
+      console.log("LLM으로 보냄 : ", text)
       socketRef_LLM.current.send(text);
     } else {
       console.error("ws connection is not open. (8082)");
@@ -126,8 +127,10 @@ const Input = forwardRef<ChildProps>((props, ref) => {
   useEffect(() => {
     socketRef.current.onmessage = (event) => {
       const jsonString = JSON.parse(event.data);
+      console.log("받은 데이터", jsonString)
       if (!isChecked && jsonString.result) {
-        setText((prev) => prev + " " + jsonString.result);
+        const joinedString = jsonString.result.join('').trim();
+        setText((prev) => prev + " " + joinedString);
         setPrevious(jsonString.result);
       }
     };
