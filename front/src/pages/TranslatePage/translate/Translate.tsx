@@ -5,6 +5,7 @@ import {
   resultText,
   dchannel,
   isGeneratingSentence,
+  isTranslatingSentence,
 } from "../../../utils/recoil/atom";
 import { useRecoilState, useRecoilValue } from "recoil";
 import { useEffect, useRef, useState } from "react";
@@ -15,8 +16,15 @@ import ConfigModal from "../config/ConfigModal";
 import { NotTranslating } from "./NotTranslating";
 import Webcam from "react-webcam";
 
+const language = ["영어", "일본어", "중국어", "독일어", "프랑스어"];
+
+
 const Translate = () => {
   const [isGenerating, setIsGenerating] = useRecoilState(isGeneratingSentence); // LLM API 응답 대기중 여부
+  const [isTranslating, setIsTranslating] = useRecoilState(isTranslatingSentence); // LLM API 응답 대기중 여부
+  //토글
+  const [selectedLanguage, setSelectedLanguage] = useState("영어");
+  const [isOpen, setIsOpen] = useState(false);
 
   const [openModal, setOpenModal] = useState(false);
   const onModalAlert = () => {
@@ -28,6 +36,13 @@ const Translate = () => {
     setTranslate(true);
   };
 
+  //토글
+  const toggleDropdown = () => setIsOpen((prev) => !prev);
+  const handleSelect = (country: string) => {
+    setSelectedLanguage(country);
+    setIsOpen(false);
+  };
+
 
   const childComponentRef = useRef<ChildProps>(null);
 
@@ -35,6 +50,15 @@ const Translate = () => {
     if (childComponentRef.current) {
       childComponentRef?.current?.send_words();
       setIsGenerating(true);
+    } else{
+      alert("서버 연결 확인 및 새로고침 후 다시 시도해주세요.")
+    }
+  };
+
+  const translate_sentence = ()=>{
+    if (childComponentRef.current) {
+      childComponentRef?.current?.translate(selectedLanguage);
+      setIsTranslating(true);
     } else{
       alert("서버 연결 확인 및 새로고침 후 다시 시도해주세요.")
     }
@@ -128,6 +152,34 @@ const Translate = () => {
                 >
                   {isGenerating ? '문장 생성중...' : '문장 생성'}
                 </button>
+                <div className="pl-4"></div>
+                <button
+                  onClick={translate_sentence}
+                  className="ml-4 md:ml-0 flex flex-row justify-center items-center rounded-xl w-[8rem] h-[2.5rem] md:w-[10rem] md:h-[2.7rem] bg-[#3498db] hover:bg-[#2980b9] transition-colors duration-200 text-white font-main text-lg"
+                >
+                  {isTranslating ? '변역 생성중...' : '변역 생성'}
+                </button>
+                <div className="pl-4 relative inline-block w-32">
+                  <button
+                    onClick={toggleDropdown}
+                    className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition-colors duration-200"
+                  >
+                    {selectedLanguage} ▼
+                  </button>
+                  {isOpen && (
+                    <ul className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-md">
+                      {language.map((country) => (
+                        <li
+                          key={country}
+                          onClick={() => handleSelect(country)}
+                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+                        >
+                          {country}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             </div>
           </>

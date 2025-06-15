@@ -14,14 +14,17 @@ import {
   Results as HolisticResults,
 } from "@mediapipe/holistic";
 import { useRecoilState } from "recoil";
-import { resultText, isGeneratingSentence } from "../../../utils/recoil/atom";
+import { resultText, isGeneratingSentence, isTranslatingSentence } from "../../../utils/recoil/atom";
 
 export interface ChildProps {
   send_words: () => void;
+  translate: (language: string) => void; 
 }
 
 const Input = forwardRef<ChildProps>((props, ref) => {
   const [isGenerating, setIsGenerating] = useRecoilState(isGeneratingSentence);
+  const [isTranslating, setIsTranslating] = useRecoilState(isTranslatingSentence);
+
   const [text, setText] = useRecoilState(resultText);
   const [isChecked, setIsChecked] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -50,6 +53,8 @@ const Input = forwardRef<ChildProps>((props, ref) => {
   const socketRef = useRef(createWebSocket("ws://localhost:8080"));
   const socketRef_hands = useRef(createWebSocket("ws://localhost:8081"));
   const socketRef_LLM = useRef(createWebSocket("ws://localhost:8082"));
+  const socketRef_Translate = useRef(createWebSocket("ws://localhost:8083"));
+
 
   const transmission_frequency = 1000 / 30;
 
@@ -61,7 +66,7 @@ const Input = forwardRef<ChildProps>((props, ref) => {
     setPrevious("");
   };
 
-  useImperativeHandle(ref, () => ({ send_words }));
+  useImperativeHandle(ref, () => ({ send_words, translate }));
 
   const OutputData = useCallback(() => {
     const imageSrc = webcamRef.current?.getScreenshot();
@@ -91,6 +96,20 @@ const Input = forwardRef<ChildProps>((props, ref) => {
       socketRef_LLM.current.send(text);
     } else {
       console.error("ws connection is not open. (8082)");
+    }
+  }, [text]);
+
+  const translate = useCallback((language : string) => {
+    if (text && socketRef_Translate.current.readyState === WebSocket.OPEN) {
+      const payload = {
+        message: text,
+        language: language,
+      };
+      console.log("LLM으로 보냄 : ", payload)
+
+      socketRef_Translate.current.send(JSON.stringify(payload));
+    } else {
+      console.error("ws connection is not open. (8083)");
     }
   }, [text]);
 
@@ -197,6 +216,30 @@ const Input = forwardRef<ChildProps>((props, ref) => {
     return () => {
       if (socketRef_LLM.current.readyState === WebSocket.OPEN) {
         socketRef_LLM.current.close();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    socketRef_Translate.current.onmessage = (event) => {
+      const jsonString = JSON.parse(event.data);
+      setText(jsonString.result);
+      setIsTranslating(false);
+    };
+
+    socketRef_Translate.current.onopen = () => {
+      console.log("ws connected (8083_useEffect)");
+      setIsConnected(prev => ({ ...prev, llm: true }));
+    };
+    
+    socketRef_Translate.current.onclose = () => {
+      console.log("ws closed (8083_useEffect)");
+      setIsConnected(prev => ({ ...prev, llm: false }));
+    };
+
+    return () => {
+      if (socketRef_Translate.current.readyState === WebSocket.OPEN) {
+        socketRef_Translate.current.close();
       }
     };
   }, []);

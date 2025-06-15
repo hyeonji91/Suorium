@@ -17,6 +17,10 @@ import sys
 import os
 from dotenv import load_dotenv
 
+from gemini_server import AIChatClient
+
+
+
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(project_root)
@@ -33,6 +37,8 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = os.getenv("GEMINI_API_URL")
 LLM_ID = "gemini-2.0-flash-lite"
+
+chat_client = AIChatClient(GEMINI_API_URL, GEMINI_API_KEY, LLM_ID)
 
 json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'idx2word2.json')
 with open(json_path, 'r', encoding='utf-8') as f:
@@ -258,10 +264,14 @@ async def handle_client(websocket, path):
 
 start_server_1 = websockets.serve(handle_client, "localhost", 8080)
 start_server_2 = websockets.serve(finger_spell, "localhost", 8081)  
-start_server_3 = websockets.serve(generate_sentence, "localhost", 8082)
+# start_server_3 = websockets.serve(generate_sentence, "localhost", 8082)
+start_server_3 = websockets.serve(chat_client.ask, "localhost", 8082)
+start_server_4 = websockets.serve(chat_client.translate, "localhost", 8083)
+
+
 
 async def main():
-    await asyncio.gather(start_server_1, start_server_2, start_server_3)
+    await asyncio.gather(start_server_1, start_server_2, start_server_3, start_server_4)
 
 if __name__ == "__main__":
     processor_thread = threading.Thread(target=frame_processor)

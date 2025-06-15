@@ -24,6 +24,11 @@ export const isGeneratingSentence = atom({  // LLM API 응답 대기중 여부
   default: false,
 });
 
+export const isTranslatingSentence = atom({  // LLM API 응답 대기중 여부
+  key: "isTranslatingSentence",
+  default: false,
+});
+
 export const dchannel = atom({
   key: "dchannel",
   default: "",
