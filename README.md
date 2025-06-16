@@ -1,4 +1,5 @@
-# 🧏🏻‍♀️ 수어리움: 모두를 위한 실시간 수어 번역 & 학습 서비스
+# 수어리움: 모두를 위한 실시간 수어 번역 & 학습 서비스
+<img width="300" alt="수어리움 로고" src="https://github.com/user-attachments/assets/6f21f9da-e6a6-4ec8-940f-41b3e3c16f0a" />
 
 **수어리움**은 '수어(Sign Language)'와 '아트리움(Atrium)'의 합성어로,  
 **수어를 사용하는 열린 공간**을 뜻합니다.  
