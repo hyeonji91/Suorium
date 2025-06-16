@@ -11,9 +11,15 @@ import threading
 import time
 from tensorflow.keras.models import load_model
 import tensorflow as tf
+from gemini import AIChatClient
 
 import sys
 import os
+from dotenv import load_dotenv
+
+from gemini_server import AIChatClient
+
+
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,7 +28,70 @@ sys.path.append(project_root)
 from server.fingerspell.fs_8081 import finger_spell
 from server.LLM.LLM_8082 import generate_sentence
 
+FEATURE_DIM = 84
+NUM_CLASSES = 133
+MIN_SEQ = 40
+MAX_SEQ = 101
 
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_URL = os.getenv("GEMINI_API_URL")
+LLM_ID = "gemini-2.0-flash-lite"
+
+chat_client = AIChatClient(GEMINI_API_URL, GEMINI_API_KEY, LLM_ID)
+
+json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'idx2word2.json')
+with open(json_path, 'r', encoding='utf-8') as f:
+    idx2word = json.load(f)
+
+# 정규화
+def norm(x):
+    mean = x.mean(axis=0, keepdims=True)
+    std  = x.std(axis=0, keepdims=True) + 1e-6
+    x = (x - mean) / std
+    return x
+
+# 키포인트 추출
+def extract_keypoints(results):
+        # 왼손 키포인트 추출
+        joint_left = np.zeros((21,2))
+        if results.left_hand_landmarks:
+            # 키포인트 추출
+            for j, lm in enumerate(results.left_hand_landmarks.landmark):
+                joint_left[j] = [lm.x, lm.y]
+        hand_left_x = norm(joint_left[:, 0])
+        hand_left_y = norm(joint_left[:, 1])          
+        
+        # 오른손 키포인트 추출
+        joint_right = np.zeros((21,2))
+        if results.right_hand_landmarks:
+            # 키포인트 추출
+            for j, lm in enumerate(results.right_hand_landmarks.landmark):
+                joint_right[j] = [lm.x, lm.y]
+        hand_right_x = norm(joint_right[:, 0])
+        hand_right_y = norm(joint_right[:, 1])
+        
+        hand_left_xy = np.concatenate([hand_left_x, hand_left_y], axis=0)
+        hand_right_xy = np.concatenate([hand_right_x, hand_right_y], axis=0)
+        
+        frame_keypoints =  np.concatenate([hand_left_xy.flatten(), hand_right_xy.flatten()], axis=0)
+
+        return frame_keypoints # d =  21 * 4 = 84
+
+def keypoints_padding(keypoints):        
+    pad_len = MAX_SEQ - len(keypoints)
+    pad_array = np.zeros((pad_len, FEATURE_DIM), dtype=np.float32)
+    keypoints = np.vstack([keypoints, pad_array])
+    return keypoints.astype(np.float32)
+
+### 모델 가져오기 ###
+model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gru_tensor.h5')
+model = load_model(model_path)
+### gemini 설정 ###
+chat_client = AIChatClient(GEMINI_API_URL, GEMINI_API_KEY, LLM_ID)
+
+
+#===========================================
 mp_holistic = mp.solutions.holistic  # holistic: 얼굴, 손 등 감지
 
 def process_frame(image_data):
@@ -46,7 +115,7 @@ def mediapipe_detection(image, model):
 script_directory = os.path.dirname(os.path.abspath(__file__))
 print("현재 작업 디렉토리:", script_directory)
 
-MODEL_PATH = os.path.join(script_directory, 'model_ko.h5')
+MODEL_PATH = os.path.join(script_directory, 'gru_tensor.h5')
 custom_objects = {'LSTM': lambda *args, **kwargs: tf.keras.layers.LSTM(*args, **{k: v for k, v in kwargs.items() if k != 'time_major'})}
 model = load_model(MODEL_PATH, compile=False, custom_objects=custom_objects)  # 코랩 사용시 compile=False 필수
 
@@ -65,7 +134,7 @@ with open(word_list_dir, 'r', encoding='utf-8') as file:
 print(actions) # debug
 
 sentence_length = 10
-seq_length = 30
+# seq_length = 30
 
 frame_queue = queue.Queue()
 result_queue = queue.Queue() # 멀티스레딩 - 처리할 작업 목록
@@ -73,18 +142,22 @@ result_queue = queue.Queue() # 멀티스레딩 - 처리할 작업 목록
 # 데이터 전처리, lstm predict 스레드
 def frame_processor():
     global frame_queue
-    seq = []
-    previous = ''
-    detected_word = ['','','']
-    detected_word_len = 3
+    
+    keypoints_sequence = [] # 키포인트 저장용
+    seq_action = ["", ""] # 확인용
+    sentence = [" ", ] # 예측한 단어 저장용
+    word = ""
+
+
+    # seq = []
+    # previous = ''
+    # detected_word = ['','','']
+    # detected_word_len = 3
     clear_count=0
     pre_no_hands=False
     
-    mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(
-        max_num_hands=2,
-        min_detection_confidence=0.4,
-        min_tracking_confidence=0.4)
+    mp_holistic = mp.solutions.holistic
+    holistic = mp_holistic.Holistic()
     
     while True:
         message = frame_queue.get()
@@ -94,109 +167,78 @@ def frame_processor():
         frame = process_frame(message)
         if frame is None:
             break
-        image, result = mediapipe_detection(frame, hands)
+        image, result = mediapipe_detection(frame, holistic)
         
-        if result.multi_hand_landmarks is not None:
-            if pre_no_hands:
-                pre_no_hands = False
-                clear_count=0
-            h = 0  
-            d1 = np.empty(0)
-            d2 = np.empty(0)
-            for res in result.multi_hand_landmarks:  # 감지된 손의 수만큼 반복
-                h += 1
-                joint = np.zeros((21, 2))
-                for j, lm in enumerate(res.landmark):
-                    joint[j] = [lm.x, lm.y] 
+        # if result.multi_hand_landmarks is not None:
+        #     if pre_no_hands:
+        #         pre_no_hands = False
+        #         clear_count=0
+        
+        angles = extract_keypoints(result)
+        # 디버깅 [0. ,] 이 아니면 출력
+        if not np.allclose(angles[:10], np.zeros(10)):
+            print("angles ", angles[:10])
 
-                # 각 손가락 마디 벡터 계산
-                v1 = joint[[0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 0, 13, 14, 15, 0, 17, 18, 19], :3]  # Parent joint
-                v2 = joint[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], :3]  # Child joint
-                v = v2 - v1  # [20, 3]
-                
-                # 정규화 (크기 1의 단위벡터로)
-                v = v / np.linalg.norm(v, axis=1)[:, np.newaxis]
+        keypoints_sequence.append(angles)
+        if len(keypoints_sequence) > MAX_SEQ: # 101 초과이면 마지막 100로 prediction 한다
+            sequence = keypoints_sequence[-MAX_SEQ:]  
+        else: # 101개 이하일 때 패딩해서 사용
+            sequence = keypoints_sequence
+            sequence = keypoints_padding(sequence)
 
-                # 내적의 arcos으로 손가락 각 마디의 사이각 계산
-                angle = np.arccos(np.einsum('nt,nt->n',
-                                            v[[0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18], :],
-                                            v[[1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19], :]))
+        if len(sequence) > MIN_SEQ * 50:  # 메모리 정리
+            sequence = sequence[-MIN_SEQ:]
 
-                angle = np.degrees(angle)  # 라디안 -> 도
-                angle_label = np.array([angle], dtype=np.float32)
-                if h == 1:
-                    d1 = np.concatenate([joint.flatten(), angle_label[0]])
-                else:
-                    d2 = np.concatenate([joint.flatten(), angle_label[0]])
-
-            d = np.concatenate([d1, d2])
-
-            if len(d) <= 57: # 한손만 감지될 경우 나머지 손 제로패딩
-                d = np.concatenate([d, np.zeros(len(d))])
-
-            seq.append(d)
-
-            if len(seq) < seq_length:  # 시퀀스 최소치가 쌓인 이후부터 판별
-                continue
-
-            if len(seq) > seq_length * 50:  # 메모리 정리
-                seq = seq[-seq_length:]
-
-            # 시퀀스 데이터를 신        경망 모델에 입력으로 사용할 수 있는 형태로 변환
-            input_data = np.expand_dims(np.array(seq[-seq_length:], dtype=np.float32), axis=0)
-
-            y_pred = model.predict(input_data).squeeze()  # 각 동작에 대한 예측 결과 (각각의 확률)
-
-            i_pred = int(np.argmax(y_pred))  # 최댓값 인덱스: 예측값이 가장 높은 값(동작)의 인덱스
-            conf = y_pred[i_pred]  # 가장 확률 높은 동작의 확률
-            # print("conf? ", conf)
-            if conf < 0.9:  # 90% 이상일 때만 수행
-                continue
-
-            action = actions[i_pred]
-            # print("-", action)
-
-            detected_word.append(action)
-            if len(detected_word)>50:
-                detected_word = detected_word[-detected_word_len:]
+        if len(keypoints_sequence) >= MIN_SEQ:  # 전체 30 프레임 이상이면 
+            sequence = np.expand_dims(sequence, axis=0)  # batch dimension 추가
+            predictions = model.predict(sequence, verbose=0)
+            predicted_class = np.argmax(predictions, axis=1)[0]
             
-            detected = True
+            predicted_class_name = idx2word.get(str(predicted_class), "<UNK>")
+            probality = predictions[0][predicted_class]
+            if probality > 0.5:
+                print(f"예측된 클래스: {predicted_class_name}, 확률: {probality:.2f}")
 
-            for a in detected_word[-detected_word_len:-1]:
-                if a!=detected_word[-1]:
-                    detected = False
-                    break
-            
-            if not detected: continue
+            if probality>0.8:
+                seq_action.append(predicted_class_name)
+                if seq_action[-1] == seq_action[-2]: # 연속으로 같은 동작일 때 (정확성 체크)
+                    if predicted_class_name != sentence[-1]:
+                        sentence.append(predicted_class_name)
+                        print('sentence ', sentence)
+                        keypoints_sequence.clear()
 
-            if previous == action: 
-                # print("인식됨(중복)", action)
-                seq = []
-                frame_queue = queue.Queue() # 작업 리스트 초기화
-                continue  # 중복 전달 회피
-            previous = action
-            print("인식됨", action)
-            time.sleep(0.5)
-            seq = []
-            frame_queue = queue.Queue() # 작업 리스트 초기화
-            # print("큐 초기화")
-            
-            result_dict = {'result': action}
+                        print('prediction ', predicted_class, ':', predicted_class_name)
+                        print('acc ', probality) # (batch, class)
+
+                        word = f'Prediction: {predicted_class_name} Acc: {probality:.2f}'    
+
+        
+        
+        #======================================================== 단어 detected
+        
+        if len(sentence) >1:
+            result_dict = {'result': sentence}
             result_json = json.dumps(result_dict)
+            time.sleep(0.5)
+            sentence = [" ", ]
+            frame_queue = queue.Queue() # 작업 리스트 초기화
 
             result_queue.put(result_json)
-        else:
-            # print(clear_count, len(seq))
-            if pre_no_hands:
-                if len(seq)!=0:
-                    # print("increasing...")
-                    clear_count+=1
-                    if clear_count>50:
-                        clear_count = 0
-                        # print("cleared")
-                        seq=[]
-            else:
-                pre_no_hands=True
+            print("result_json" ,result_json)
+
+
+        # else:
+        #     # print(clear_count, len(seq))
+        #     if pre_no_hands:
+        #         if len(sentence)!=0:
+        #             # print("increasing...")
+        #             clear_count+=1
+        #             if clear_count>50:
+        #                 clear_count = 0
+        #                 # print("cleared")
+        #                 sentence=[]
+        #     else:
+        #         pre_no_hands=True
 
 # 송수신 스레드
 async def handle_client(websocket, path):
@@ -220,13 +262,16 @@ async def handle_client(websocket, path):
         result_queue.put(None)
 
 
-
 start_server_1 = websockets.serve(handle_client, "localhost", 8080)
 start_server_2 = websockets.serve(finger_spell, "localhost", 8081)  
-start_server_3 = websockets.serve(generate_sentence, "localhost", 8082)
+# start_server_3 = websockets.serve(generate_sentence, "localhost", 8082)
+start_server_3 = websockets.serve(chat_client.ask, "localhost", 8082)
+start_server_4 = websockets.serve(chat_client.translate, "localhost", 8083)
+
+
 
 async def main():
-    await asyncio.gather(start_server_1, start_server_2, start_server_3)
+    await asyncio.gather(start_server_1, start_server_2, start_server_3, start_server_4)
 
 if __name__ == "__main__":
     processor_thread = threading.Thread(target=frame_processor)
